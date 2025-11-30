@@ -86,4 +86,17 @@ async def ai_comment(req: AICommentRequest) -> AICommentResponse:
         text=text,
         generated_at=datetime.utcnow(),
     )
-
+if __name__ == "__main__":
+    import uvicorn
+    import os
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 8000))
+    )
+@app.get("/")
+def root():
+    return {"status": "ok"}
+    
+    
+    
