@@ -9,9 +9,17 @@ from openai import OpenAI
 
 app = FastAPI(title="MokuMoku AI Server", version="0.1.0")
 
+# ===== OpenAI クライアント初期化 =====
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    # ここで例外を投げると Railway のログに必ず出る
+    raise RuntimeError("AI server: OPENAI_API_KEY is not set in environment")
+
+client = OpenAI(api_key=api_key)
+
 SYSTEM_PROMPT = """
 あなたは頭痛・体調ログアプリ「もくもくスタンプカレンダー」の専用アシスタントです。
-出力は必ず **日本語** で、1〜2文の短いコメントだけにしてください。
+出力は必ず日本語で、1〜2文の短いコメントだけにしてください。
 
 【役割】
 - ユーザーが「この日 / この週 / この月はどんな感じだったか」を、ざっくり振り返れるように、
@@ -33,9 +41,9 @@ SYSTEM_PROMPT = """
 - 重くなりすぎない、やさしい励まし系のトーンで書く。
 """
 
-
 @app.get("/")
 def root():
+    # ヘルスチェック用
     return {"status": "ok"}
 
 
@@ -84,24 +92,17 @@ class AICommentResponse(BaseModel):
 
 @app.post("/v1/ai_comment", response_model=AICommentResponse)
 async def ai_comment(req: AICommentRequest) -> AICommentResponse:
-    # 起動時じゃなくて「リクエストごと」にキーを読む
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise HTTPException(
-            status_code=500,
-            detail="AI server is not configured correctly (no OPENAI_API_KEY).",
-        )
-
-    client = OpenAI(api_key=api_key)
-
+    # どのスコープか
     scope_label = {
         Scope.day: "この日",
         Scope.week: "この週",
         Scope.month: "この月",
     }.get(req.scope, "この期間")
 
+    # ==== ユーザープロンプト組み立て ====
     parts: list[str] = []
 
+    # 気圧
     if req.summary.pressure is not None:
         p = req.summary.pressure
         parts.append(
@@ -110,6 +111,7 @@ async def ai_comment(req: AICommentRequest) -> AICommentResponse:
     else:
         parts.append("- 気圧: 情報なし")
 
+    # 頭痛
     h = req.summary.headache
     parts.append(
         f"- 頭痛スタンプ: 合計 {h.count} 件, "
@@ -117,11 +119,13 @@ async def ai_comment(req: AICommentRequest) -> AICommentResponse:
         f"平均レベル {h.avg_level if h.avg_level is not None else '情報なし'}"
     )
 
+    # 睡眠
     if req.summary.sleep_hours_avg is not None:
         parts.append(f"- 平均睡眠時間: {req.summary.sleep_hours_avg} 時間")
     else:
         parts.append("- 平均睡眠時間: 情報なし")
 
+    # 活動量
     if req.summary.activity_score_avg is not None:
         parts.append(f"- 活動量スコア平均: {req.summary.activity_score_avg}")
     else:
@@ -138,16 +142,30 @@ async def ai_comment(req: AICommentRequest) -> AICommentResponse:
 重くなりすぎず、やさしく振り返る感じでお願いします。
 """
 
-    completion = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.4,
-    )
+    # ==== OpenAI 呼び出し（例外を拾う） ====
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.4,
+        )
+    except Exception as e:
+        # ログにも出す
+        print("=== OpenAI ERROR ===")
+        print(repr(e))
+        # iOS 側にもエラー内容がそのまま見えるように返す
+        raise HTTPException(
+            status_code=500,
+            detail=f"OpenAI error: {e.__class__.__name__}: {e}",
+        )
 
-    text = completion.choices[0].message.content.strip()
+    text = (completion.choices[0].message.content or "").strip()
+
+    if not text:
+        raise HTTPException(status_code=500, detail="OpenAI returned empty message")
 
     return AICommentResponse(
         id=f"cmnt_{req.target_date}_{req.scope}_{req.user_id}",
@@ -155,4 +173,14 @@ async def ai_comment(req: AICommentRequest) -> AICommentResponse:
         target_date=req.target_date,
         text=text,
         generated_at=datetime.utcnow(),
+    )
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8080")),
     )
