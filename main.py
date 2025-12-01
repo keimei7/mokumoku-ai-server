@@ -36,7 +36,6 @@ SYSTEM_PROMPT = """
 
 @app.get("/")
 def root():
-    # ヘルスチェック用
     return {"status": "ok"}
 
 
@@ -85,10 +84,9 @@ class AICommentResponse(BaseModel):
 
 @app.post("/v1/ai_comment", response_model=AICommentResponse)
 async def ai_comment(req: AICommentRequest) -> AICommentResponse:
-    # ★ ここで毎回 API キーを読む（起動時には触らない）
+    # 起動時じゃなくて「リクエストごと」にキーを読む
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        print("ERROR: OPENAI_API_KEY is NOT set in environment")
         raise HTTPException(
             status_code=500,
             detail="AI server is not configured correctly (no OPENAI_API_KEY).",
@@ -96,17 +94,14 @@ async def ai_comment(req: AICommentRequest) -> AICommentResponse:
 
     client = OpenAI(api_key=api_key)
 
-    # スコープの日本語ラベル
     scope_label = {
         Scope.day: "この日",
         Scope.week: "この週",
         Scope.month: "この月",
     }.get(req.scope, "この期間")
 
-    # ----- ユーザープロンプトを組み立て -----
     parts: list[str] = []
 
-    # 気圧
     if req.summary.pressure is not None:
         p = req.summary.pressure
         parts.append(
@@ -115,7 +110,6 @@ async def ai_comment(req: AICommentRequest) -> AICommentResponse:
     else:
         parts.append("- 気圧: 情報なし")
 
-    # 頭痛
     h = req.summary.headache
     parts.append(
         f"- 頭痛スタンプ: 合計 {h.count} 件, "
@@ -123,13 +117,11 @@ async def ai_comment(req: AICommentRequest) -> AICommentResponse:
         f"平均レベル {h.avg_level if h.avg_level is not None else '情報なし'}"
     )
 
-    # 睡眠
     if req.summary.sleep_hours_avg is not None:
         parts.append(f"- 平均睡眠時間: {req.summary.sleep_hours_avg} 時間")
     else:
         parts.append("- 平均睡眠時間: 情報なし")
 
-    # 活動量
     if req.summary.activity_score_avg is not None:
         parts.append(f"- 活動量スコア平均: {req.summary.activity_score_avg}")
     else:
@@ -163,14 +155,4 @@ async def ai_comment(req: AICommentRequest) -> AICommentResponse:
         target_date=req.target_date,
         text=text,
         generated_at=datetime.utcnow(),
-    )
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
     )
