@@ -3,24 +3,12 @@ from typing import Optional
 from datetime import datetime
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from openai import OpenAI
 
 app = FastAPI(title="MokuMoku AI Server", version="0.1.0")
 
-# ==== OpenAI クライアント設定 ====
-api_key = os.getenv("OPENAI_API_KEY")
-
-if api_key:
-    print("DEBUG: OPENAI_API_KEY loaded = True")
-    client = OpenAI(api_key=api_key)
-else:
-    # ここでは落とさない。ログだけ出しておく。
-    print("WARNING: OPENAI_API_KEY is NOT set in environment")
-    client = OpenAI()  # ← ここはキーなしなので、呼び出したときにエラーになるだけ
-
-# ==== システムプロンプト ====
 SYSTEM_PROMPT = """
 あなたは頭痛・体調ログアプリ「もくもくスタンプカレンダー」の専用アシスタントです。
 出力は必ず **日本語** で、1〜2文の短いコメントだけにしてください。
@@ -45,8 +33,10 @@ SYSTEM_PROMPT = """
 - 重くなりすぎない、やさしい励まし系のトーンで書く。
 """
 
+
 @app.get("/")
 def root():
+    # ヘルスチェック用
     return {"status": "ok"}
 
 
@@ -95,6 +85,17 @@ class AICommentResponse(BaseModel):
 
 @app.post("/v1/ai_comment", response_model=AICommentResponse)
 async def ai_comment(req: AICommentRequest) -> AICommentResponse:
+    # ★ ここで毎回 API キーを読む（起動時には触らない）
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        print("ERROR: OPENAI_API_KEY is NOT set in environment")
+        raise HTTPException(
+            status_code=500,
+            detail="AI server is not configured correctly (no OPENAI_API_KEY).",
+        )
+
+    client = OpenAI(api_key=api_key)
+
     # スコープの日本語ラベル
     scope_label = {
         Scope.day: "この日",
@@ -109,8 +110,7 @@ async def ai_comment(req: AICommentRequest) -> AICommentResponse:
     if req.summary.pressure is not None:
         p = req.summary.pressure
         parts.append(
-            f"- 気圧: "
-            f"最低 {p.min} hPa, 最高 {p.max} hPa, 変動幅 {p.delta} hPa"
+            f"- 気圧: 最低 {p.min} hPa, 最高 {p.max} hPa, 変動幅 {p.delta} hPa"
         )
     else:
         parts.append("- 気圧: 情報なし")
@@ -168,6 +168,7 @@ async def ai_comment(req: AICommentRequest) -> AICommentResponse:
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
         app,
         host="0.0.0.0",
