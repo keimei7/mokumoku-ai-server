@@ -5,13 +5,23 @@ from datetime import datetime
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-# ★ 追加：OpenAI クライアント
+# ★ 追加
+import os
 from openai import OpenAI
 
 app = FastAPI(title="MokuMoku AI Server", version="0.1.0")
 
-# OpenAI クライアント（OPENAI_API_KEY は環境変数から読む）
-client = OpenAI()
+# ★ ここを書き換え
+api_key = (
+    os.getenv("OPENAI_API_KEY")      # Railway で設定した名前
+    or os.getenv("_OPENAI_API_KEY")  # 念のため、前に付けたかもしれないパターンも見る
+)
+
+if not api_key:
+    # ここでわざとエラー出すと、ログに理由がハッキリ残る
+    raise RuntimeError("AI server: OPENAI_API_KEY is not set in environment")
+
+client = OpenAI(api_key=api_key)
 
 # ★ 追加：システムプロンプト
 SYSTEM_PROMPT = """
